@@ -1,9 +1,11 @@
 import pygame
 import keyboard
 import mido
+import mido.backends.rtmidi
 from mido import Message, MetaMessage, MidiFile, MidiTrack, bpm2tempo, second2tick
 import time as time
 import os
+import sys
 import sqlite3
 from pygame import locals as pygame_locals
 
@@ -27,6 +29,25 @@ cursor = conn.cursor()
 # Создание таблицы, если она не существует
 cursor.execute("CREATE TABLE IF NOT EXISTS tracks (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT)")
 
+def generate_next_filename(db_file='piano_tracks.db'):
+    # Установка соединения с базой данных
+    conn = sqlite3.connect(db_file)
+    cursor = conn.cursor()
+    
+    # Проверка были ли записи в базе данных
+    cursor.execute("SELECT EXISTS(SELECT 1 FROM sqlite_sequence LIMIT 1)")
+    result = cursor.fetchone()[0]
+    if(result):
+        cursor.execute("SELECT seq + 1 FROM sqlite_sequence")
+        next_id = cursor.fetchone()[0]
+    else:
+        next_id = 1
+
+    # Формирование имени файла
+    filename = f"track_{next_id}.mid"
+
+    return filename
+
 # Получение всех сохраненных файлов из базы данных
 def get_saved_tracks():
     cursor.execute("SELECT name FROM tracks")
@@ -36,10 +57,6 @@ def get_saved_tracks():
 def add_track_to_database(track_name):
     cursor.execute("INSERT INTO tracks (name) VALUES (?)", (track_name,))
     conn.commit()
-
-# Закрытие соединения с базой данных
-def close_database_connection():
-    conn.close()
 
 
 # Отображение окна выбора сохраненных файлов
@@ -131,6 +148,38 @@ class TrackSelector:
             print("No saved tracks found.")
 
 
+def update_database(directory=os.getcwd(), db_file='piano_tracks.db'):
+    if get_saved_tracks():
+
+        # Получение текущего списка файлов в базе данных
+        cursor.execute("SELECT name FROM tracks")
+        db_files = cursor.fetchall()
+        db_files = [file[0] for file in db_files]
+
+        # Сканирование директории с MIDI-файлами
+        for filename in os.listdir(directory):
+            if filename.endswith(".mid"):
+                file_path = os.path.join(directory, filename)
+
+                # Если файл уже присутствует в базе данных, пропустить его
+                if filename in db_files:
+                    continue
+
+                # Вставка нового файла в базу данных
+                cursor.execute("INSERT INTO tracks (name) VALUES (?)", (filename,))
+                conn.commit()
+                print(f"Добавлен новый файл: {filename}")
+
+        # Проверка наличия файлов в базе данных, которых нет в директории
+        for db_file in db_files:
+            if db_file not in os.listdir(directory):
+                # Удаление файла из базы данных
+                cursor.execute("DELETE FROM tracks WHERE name=?", (db_file,))
+                conn.commit()
+                print(f"Файл удален из базы данных: {db_file}")
+
+    else:
+        print("No saved tracks found.")
 
 
 
@@ -266,6 +315,7 @@ while running:
                     pressed_keys[key] = False  
             # Обработка события нажатия на кнопку "Play"
             if play_rect.collidepoint(mouse_pos):
+                update_database()
                 selector.show_saved_tracks()
                 mid = MidiFile()
                 track = MidiTrack()
@@ -279,7 +329,8 @@ while running:
             # Обработка события нажатия на кнопку "Save"
             if save_rect.collidepoint(mouse_pos):
                 print('Saving the song...')
-                track_name = f"track_{len(get_saved_tracks()) + 1}.mid"
+                update_database()
+                track_name = generate_next_filename()
                 mid.save(track_name)
                 add_track_to_database(track_name)
                 mid = MidiFile()
